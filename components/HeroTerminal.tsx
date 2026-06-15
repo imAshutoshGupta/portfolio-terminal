@@ -115,7 +115,7 @@ export default function HeroTerminal({ onAction }: { onAction: (a: TerminalActio
       {/* body */}
       <div
         ref={bodyRef}
-        className="pt-[22px] px-5 pb-[26px] font-mono text-[13.5px] leading-[1.85] [transform:translateZ(40px)] max-h-[60vh] overflow-y-auto"
+        className="pt-[22px] px-[22px] pb-[26px] font-mono text-[14px] leading-[1.8] [transform:translateZ(40px)] max-h-[60vh] overflow-y-auto"
       >
         <div>
           <span className="text-[var(--gold)]">➜</span>{" "}

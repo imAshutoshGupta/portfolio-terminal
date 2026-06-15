@@ -266,8 +266,9 @@
     border: 2px solid transparent;
     background-clip: padding-box;
   }
-  .light-red:hover::after {
-    content: "\00d7";
+  .light-red:hover::after,
+  .light-yellow:hover::after,
+  .light-green:hover::after {
     position: absolute;
     inset: 0;
     display: flex;
@@ -277,6 +278,15 @@
     color: rgba(0, 0, 0, 0.55);
     font-weight: 700;
     line-height: 1;
+  }
+  .light-red:hover::after {
+    content: "\00d7"; /* × */
+  }
+  .light-yellow:hover::after {
+    content: "\2212"; /* − */
+  }
+  .light-green:hover::after {
+    content: "\002b"; /* + */
   }
   /* dock magnification of neighbours */
   .dock-app:hover + .dock-app,

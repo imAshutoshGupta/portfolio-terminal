@@ -8,9 +8,12 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
+
+import { complete, runCommand, type Row, type SegColor } from "@/lib/repl";
 
 /* ============================================================
    ICONS — copied verbatim from the original ICON map, JSX-ified.
@@ -176,7 +179,9 @@ type AppKey =
   | "skills"
   | "writing"
   | "mail"
-  | "resume";
+  | "resume"
+  | "ashos"
+  | "trash";
 
 interface WinSpec {
   title: string;
@@ -465,34 +470,212 @@ const SkillsBody = (
   </>
 );
 
-const TerminalBody = (
-  <>
-    <div className="flex gap-[26px] font-mono text-[12.5px] leading-[1.55] max-[760px]:flex-col max-[760px]:gap-[14px]">
-      <pre className="text-[var(--v1)] whitespace-pre text-[11px] leading-[1.15] [text-shadow:0_0_14px_rgba(157,139,255,.4)] max-[760px]:text-[9px]">
-        {ascii}
-      </pre>
-      <div>
-        <div className="text-[var(--fg)]">
-          <span className="text-[var(--v2)] font-bold">ashutosh</span>@
-          <span className="text-[var(--v2)] font-bold">gupta</span>
-        </div>
-        <div className="text-[var(--faint)] my-[7px]">-----------------</div>
-        <TermLine k="role" v="Full-stack engineer" />
-        <TermLine k="uptime" v="6 years" />
-        <TermLine k="stack" v="Next.js · NestJS · React · Node · Python · AWS" />
-        <TermLine k="throughput" v="40M req/day" />
-        <TermLine k="shipped" v="12 products" />
-        <TermLine k="shell" v="zsh" />
-        <TermLine k="status" v="available" />
+/* The neofetch banner the Terminal app boots with — same content/look as before,
+   now the static header above an interactive prompt. */
+const TerminalBanner = (
+  <div className="flex gap-[26px] font-mono text-[12.5px] leading-[1.55] max-[760px]:flex-col max-[760px]:gap-[14px]">
+    <pre className="text-[var(--v1)] whitespace-pre text-[11px] leading-[1.15] [text-shadow:0_0_14px_rgba(157,139,255,.4)] max-[760px]:text-[9px]">
+      {ascii}
+    </pre>
+    <div>
+      <div className="text-[var(--fg)]">
+        <span className="text-[var(--v2)] font-bold">ashutosh</span>@
+        <span className="text-[var(--v2)] font-bold">gupta</span>
       </div>
+      <div className="text-[var(--faint)] my-[7px]">-----------------</div>
+      <TermLine k="role" v="Full-stack engineer" />
+      <TermLine k="uptime" v="6 years" />
+      <TermLine k="stack" v="Next.js · NestJS · React · Node · Python · AWS" />
+      <TermLine k="throughput" v="40M req/day" />
+      <TermLine k="shipped" v="12 products" />
+      <TermLine k="shell" v="zsh" />
+      <TermLine k="status" v="available" />
     </div>
-    <div className="mt-[14px] font-mono text-[12.5px] text-[var(--muted)]">
-      <span className="text-[var(--v3)] font-bold">ashutosh@gupta</span>:
-      <span style={{ color: "var(--v2)" }}>~</span>$ ./hire-me
-      <span className="inline-block w-[8px] h-[15px] bg-[var(--v1)] align-[-2px] animate-blink-step ml-[2px] motion-reduce:animate-none" />
-    </div>
-  </>
+  </div>
 );
+
+/* Map the REPL's semantic segment colors onto the ashOS palette (the REPL was
+   authored against the Luxe Terminal's --gold/--green tokens, which don't exist
+   in the desktop theme). */
+const OS_SEG_COLOR: Record<SegColor, string> = {
+  gold: "var(--v1)",
+  green: "var(--traffic-green)",
+  fg: "var(--fg)",
+  muted: "var(--muted)",
+  faint: "var(--faint)",
+};
+
+function OsRowView({ row }: { row: Row }) {
+  return (
+    <div className="text-[var(--muted)] whitespace-pre-wrap break-words">
+      {row.map((seg, i) => (
+        <span key={i} style={seg.c ? { color: OS_SEG_COLOR[seg.c] } : undefined}>
+          {seg.t}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+const TERMINAL_APP_KEYS: AppKey[] = [
+  "about",
+  "projects",
+  "experience",
+  "skills",
+  "writing",
+  "mail",
+];
+
+type OsTerminalHistoryItem = { cmd: string; rows: Row[] };
+
+function OsTerminal({
+  onToggleTheme,
+  onOpenApp,
+  helpSignal,
+}: {
+  onToggleTheme: (value?: "dark" | "light") => void;
+  onOpenApp: (key: AppKey) => void;
+  helpSignal: number;
+}) {
+  const [history, setHistory] = useState<OsTerminalHistoryItem[]>([]);
+  const [input, setInput] = useState("");
+  const [recall, setRecall] = useState<number | null>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const captureRef = useRef<HTMLInputElement>(null);
+
+  const submit = useCallback(
+    (raw: string) => {
+      const trimmed = raw.trim();
+      setInput("");
+      setRecall(null);
+      if (!trimmed) {
+        setHistory((h) => [...h, { cmd: raw, rows: [] }]);
+        return;
+      }
+
+      // `open <app>` resolves to an ashOS window when it names one of the apps;
+      // otherwise it falls through to the shared REPL (github/linkedin/etc.).
+      const [head, ...rest] = trimmed.split(/\s+/);
+      if (head.toLowerCase() === "open") {
+        const target = rest.join(" ").toLowerCase();
+        const appKey = TERMINAL_APP_KEYS.find((k) => k === target);
+        if (appKey) {
+          setHistory((h) => [...h, { cmd: raw, rows: [[{ t: `opening ${appKey}…`, c: "muted" }]] }]);
+          onOpenApp(appKey);
+          return;
+        }
+        if (target === "terminal") {
+          setHistory((h) => [...h, { cmd: raw, rows: [[{ t: "already here.", c: "muted" }]] }]);
+          return;
+        }
+      }
+
+      const res = runCommand(trimmed);
+      if (res.action?.type === "clear") {
+        setHistory([]);
+        return;
+      }
+      setHistory((h) => [...h, { cmd: raw, rows: res.rows }]);
+      const action = res.action;
+      if (!action) return;
+      if (action.type === "nav") {
+        window.open(action.href, "_blank", "noopener");
+      } else if (action.type === "theme") {
+        onToggleTheme(action.value);
+      } else if (action.type === "openOS") {
+        setHistory((h) => [...h, { cmd: "", rows: [[{ t: "ashOS is already running.", c: "muted" }]] }]);
+      }
+    },
+    [onOpenApp, onToggleTheme]
+  );
+
+  // Keep the view pinned to the latest output.
+  useEffect(() => {
+    if (bodyRef.current) bodyRef.current.scrollTop = bodyRef.current.scrollHeight;
+  }, [history]);
+
+  // The Help menu pipes a `help` command in via this signal.
+  useEffect(() => {
+    if (helpSignal > 0) submit("help");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [helpSignal]);
+
+  const onKeyDown = useCallback(
+    (e: ReactKeyboardEvent<HTMLInputElement>) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        submit(input);
+      } else if (e.key === "Tab") {
+        e.preventDefault();
+        const hit = complete(input);
+        if (hit) setInput(hit + " ");
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        const cmds = history.filter((h) => h.cmd.trim());
+        if (!cmds.length) return;
+        const idx = recall === null ? cmds.length - 1 : Math.max(0, recall - 1);
+        setRecall(idx);
+        setInput(cmds[idx].cmd);
+      } else if (e.key === "ArrowDown") {
+        e.preventDefault();
+        const cmds = history.filter((h) => h.cmd.trim());
+        if (recall === null) return;
+        const idx = recall + 1;
+        if (idx >= cmds.length) {
+          setRecall(null);
+          setInput("");
+        } else {
+          setRecall(idx);
+          setInput(cmds[idx].cmd);
+        }
+      }
+    },
+    [history, input, recall, submit]
+  );
+
+  return (
+    <div
+      ref={bodyRef}
+      onClick={() => captureRef.current?.focus()}
+      className="h-full overflow-y-auto font-mono text-[12.5px] leading-[1.55] cursor-text"
+    >
+      {TerminalBanner}
+      <div className="mt-[10px] text-[var(--faint)]">type &apos;help&apos; for commands.</div>
+
+      {history.map((h, i) => (
+        <div key={i} className="mt-[8px]">
+          <div className="text-[var(--muted)] break-words">
+            <span className="text-[var(--v3)] font-bold">ashutosh@gupta</span>:
+            <span className="text-[var(--v2)]">~</span>${" "}
+            <span className="text-[var(--fg)]">{h.cmd}</span>
+          </div>
+          {h.rows.map((row, j) => (
+            <OsRowView key={j} row={row} />
+          ))}
+        </div>
+      ))}
+
+      <div className="mt-[8px] text-[var(--muted)]">
+        <span className="text-[var(--v3)] font-bold">ashutosh@gupta</span>:
+        <span className="text-[var(--v2)]">~</span>${" "}
+        <span className="text-[var(--fg)] whitespace-pre-wrap break-words">{input}</span>
+        <span className="inline-block w-[8px] h-[15px] bg-[var(--v1)] align-[-2px] animate-blink-step ml-[2px] motion-reduce:animate-none" />
+      </div>
+
+      <input
+        ref={captureRef}
+        value={input}
+        onChange={(e) => setInput(e.target.value)}
+        onKeyDown={onKeyDown}
+        aria-label="Terminal command input — type help"
+        spellCheck={false}
+        autoComplete="off"
+        autoCapitalize="off"
+        className="fixed -left-[9999px] w-px h-px opacity-0"
+      />
+    </div>
+  );
+}
 
 const MailBody = (
   <>
@@ -510,8 +693,48 @@ const MailBody = (
       s="in/imAshutoshGupta"
       href="https://linkedin.com/in/imAshutoshGupta"
     />
-    <MailRow ic={Icon.link} t="Résumé" s="resume.pdf" href="#" />
+    <MailRow ic={Icon.link} t="Résumé" s="resume.pdf" href="/resume.pdf" />
   </>
+);
+
+const AshOsBody = (
+  <>
+    <Eyebrow>system</Eyebrow>
+    <div className="flex items-center gap-[16px] mb-[18px]">
+      <div className="w-[56px] h-[56px] flex-[0_0_56px] [&>svg]:w-full [&>svg]:h-full">
+        {MenubarLogo}
+      </div>
+      <div>
+        <div className="font-disp font-semibold text-[22px] leading-[1.1]">ashOS 6.0</div>
+        <div className="text-[var(--muted)] text-[13.5px] mt-[3px]">
+          A portfolio desktop environment
+        </div>
+      </div>
+    </div>
+    <div className="font-mono text-[12.5px] leading-[1.7] text-[var(--muted)]">
+      <TermLine k="build" v="Luxe / aurora" />
+      <TermLine k="engine" v="Next.js · React · Tailwind" />
+      <TermLine k="windows" v="drag · minimize · maximize" />
+      <TermLine k="shell" v="zsh (try the Terminal app)" />
+      <TermLine k="author" v="Ashutosh Gupta" />
+    </div>
+    <p className="text-[var(--muted)] text-[13.5px] leading-[1.55] mt-[16px] max-w-[40ch]">
+      Tip: every menu in the bar works — explore <b>Go</b> to launch apps, or open the
+      Terminal and type <b>help</b>.
+    </p>
+  </>
+);
+
+const TrashBody = (
+  <div className="h-full grid place-items-center text-center">
+    <div>
+      <div className="w-[52px] h-[52px] mx-auto mb-[12px] opacity-60 [&>svg]:w-full [&>svg]:h-full">
+        {DesktopTrashIcon}
+      </div>
+      <div className="font-disp font-semibold text-[18px]">Trash is empty</div>
+      <div className="text-[var(--muted)] text-[13px] mt-[4px]">Nothing to recover.</div>
+    </div>
+  </div>
 );
 
 const CONTENT: Record<AppKey, WinSpec> = {
@@ -539,11 +762,13 @@ const CONTENT: Record<AppKey, WinSpec> = {
     title: "Terminal — zsh",
     icon: Icon.terminal,
     w: 560,
-    h: 340,
+    h: 360,
     x: 300,
     y: 380,
     bodyClass: "term-body",
-    body: TerminalBody,
+    // The interactive terminal is rendered directly in the window layer; this is
+    // only a fallback placeholder.
+    body: null,
   },
   writing: {
     title: "Writing",
@@ -577,9 +802,29 @@ const CONTENT: Record<AppKey, WinSpec> = {
     y: 140,
     body: MailBody,
   },
+  ashos: {
+    title: "About ashOS",
+    icon: Icon.about,
+    w: 460,
+    h: 440,
+    x: 220,
+    y: 120,
+    body: AshOsBody,
+  },
+  trash: {
+    title: "Trash",
+    icon: Icon.folder,
+    w: 360,
+    h: 300,
+    x: 360,
+    y: 220,
+    body: TrashBody,
+  },
 };
 
-const DOCK: Array<[Exclude<AppKey, "resume">, string]> = [
+type DockKey = "about" | "projects" | "experience" | "terminal" | "skills" | "writing" | "mail";
+
+const DOCK: Array<[DockKey, string]> = [
   ["about", "About"],
   ["projects", "Projects"],
   ["experience", "Experience"],
@@ -598,6 +843,8 @@ interface OpenWin {
   y: number;
   z: number;
   closing: boolean;
+  minimized: boolean;
+  maximized: boolean;
 }
 
 function isMobile() {
@@ -607,13 +854,19 @@ function isMobile() {
 function Window({
   win,
   spec,
+  body,
   onClose,
+  onMinimize,
+  onMaximize,
   onFocus,
   onDrag,
 }: {
   win: OpenWin;
   spec: WinSpec;
+  body: ReactNode;
   onClose: () => void;
+  onMinimize: () => void;
+  onMaximize: () => void;
   onFocus: () => void;
   onDrag: (clientX: number, clientY: number, offX: number, offY: number) => void;
 }) {
@@ -627,7 +880,7 @@ function Window({
   const onHeaderPointerDown = useCallback(
     (e: ReactPointerEvent<HTMLDivElement>) => {
       if ((e.target as HTMLElement).closest(".light")) return;
-      if (isMobile()) return;
+      if (isMobile() || win.maximized) return;
       const el = ref.current;
       if (!el) return;
       const r = el.getBoundingClientRect();
@@ -635,7 +888,7 @@ function Window({
       (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
       onFocus();
     },
-    [onFocus]
+    [onFocus, win.maximized]
   );
 
   const onHeaderPointerMove = useCallback(
@@ -655,13 +908,15 @@ function Window({
     }
   }, []);
 
-  const desktopStyle: CSSProperties = {
-    left: win.x,
-    top: win.y,
-    width: spec.w,
-    height: spec.h,
-    zIndex: win.z,
-  };
+  const desktopStyle: CSSProperties = win.maximized
+    ? { left: 0, top: 0, width: "100%", height: "100%", zIndex: win.z, borderRadius: 0 }
+    : {
+        left: win.x,
+        top: win.y,
+        width: spec.w,
+        height: spec.h,
+        zIndex: win.z,
+      };
 
   return (
     <div
@@ -687,14 +942,33 @@ function Window({
           <button
             type="button"
             title="Close"
+            aria-label="Close window"
             onClick={(e) => {
               e.stopPropagation();
               onClose();
             }}
             className="light light-red w-[12px] h-[12px] rounded-full border-none cursor-pointer relative bg-[var(--traffic-red)]"
           />
-          <span className="light w-[12px] h-[12px] rounded-full border-none cursor-default relative bg-[var(--traffic-yellow)]" />
-          <span className="light w-[12px] h-[12px] rounded-full border-none cursor-default relative bg-[var(--traffic-green)]" />
+          <button
+            type="button"
+            title="Minimize"
+            aria-label="Minimize window"
+            onClick={(e) => {
+              e.stopPropagation();
+              onMinimize();
+            }}
+            className="light light-yellow w-[12px] h-[12px] rounded-full border-none cursor-pointer relative bg-[var(--traffic-yellow)]"
+          />
+          <button
+            type="button"
+            title={win.maximized ? "Restore" : "Maximize"}
+            aria-label={win.maximized ? "Restore window" : "Maximize window"}
+            onClick={(e) => {
+              e.stopPropagation();
+              onMaximize();
+            }}
+            className="light light-green w-[12px] h-[12px] rounded-full border-none cursor-pointer relative bg-[var(--traffic-green)]"
+          />
         </div>
         <div className="absolute left-1/2 -translate-x-1/2 text-[13px] font-semibold text-[var(--muted)] tracking-[.2px] flex items-center gap-[7px] pointer-events-none [&>svg]:w-[14px] [&>svg]:h-[14px]">
           <span className="w-[14px] h-[14px] inline-flex [&>svg]:w-full [&>svg]:h-full">
@@ -711,7 +985,7 @@ function Window({
             : "px-[26px] py-[24px]")
         }
       >
-        {spec.body}
+        {body}
       </div>
     </div>
   );
@@ -729,8 +1003,8 @@ export default function DesktopPage() {
     if (current === "light" || current === "dark") setTheme(current);
 
     setWins([
-      { key: "about", x: CONTENT.about.x, y: CONTENT.about.y, z: 21, closing: false },
-      { key: "terminal", x: CONTENT.terminal.x, y: CONTENT.terminal.y, z: 22, closing: false },
+      { key: "about", x: CONTENT.about.x, y: CONTENT.about.y, z: 21, closing: false, minimized: false, maximized: false },
+      { key: "terminal", x: CONTENT.terminal.x, y: CONTENT.terminal.y, z: 22, closing: false, minimized: false, maximized: false },
     ]);
     zTop.current = 22;
   }, []);
@@ -752,17 +1026,20 @@ export default function DesktopPage() {
     return () => clearInterval(id);
   }, []);
 
-  const openWindow = useCallback((key: AppKey | "trash") => {
-    if (key === "trash") return; // trash is empty / no-op
+  const openWindow = useCallback((key: AppKey) => {
     setWins((prev) => {
       const existing = prev.find((w) => w.key === key && !w.closing);
       const nextZ = zTop.current + 1;
       zTop.current = nextZ;
       if (existing) {
-        return prev.map((w) => (w === existing ? { ...w, z: nextZ } : w));
+        // restore from minimized and bring to front
+        return prev.map((w) => (w === existing ? { ...w, z: nextZ, minimized: false } : w));
       }
       const spec = CONTENT[key];
-      return [...prev, { key, x: spec.x, y: spec.y, z: nextZ, closing: false }];
+      return [
+        ...prev,
+        { key, x: spec.x, y: spec.y, z: nextZ, closing: false, minimized: false, maximized: false },
+      ];
     });
   }, []);
 
@@ -789,6 +1066,20 @@ export default function DesktopPage() {
     );
   }, []);
 
+  const minimizeWindow = useCallback((key: AppKey) => {
+    setWins((prev) => prev.map((w) => (w.key === key ? { ...w, minimized: true } : w)));
+  }, []);
+
+  const maximizeWindow = useCallback((key: AppKey) => {
+    setWins((prev) => {
+      const nextZ = zTop.current + 1;
+      zTop.current = nextZ;
+      return prev.map((w) =>
+        w.key === key ? { ...w, maximized: !w.maximized, minimized: false, z: nextZ } : w
+      );
+    });
+  }, []);
+
   const dragWindow = useCallback(
     (key: AppKey, clientX: number, clientY: number, offX: number, offY: number) => {
       let nx = clientX - offX;
@@ -800,13 +1091,90 @@ export default function DesktopPage() {
     []
   );
 
-  const toggleTheme = useCallback(() => {
+  const toggleTheme = useCallback((value?: "dark" | "light") => {
     setTheme((prev) => {
-      const next = prev === "dark" ? "light" : "dark";
+      const next = value ?? (prev === "dark" ? "light" : "dark");
       document.documentElement.setAttribute("data-theme", next);
       return next;
     });
   }, []);
+
+  // The topmost interactable window — the target for File ▸ Close/Minimize.
+  const topKey = (() => {
+    const visible = wins.filter((w) => !w.closing && !w.minimized);
+    if (!visible.length) return null;
+    return visible.reduce((a, b) => (a.z > b.z ? a : b)).key;
+  })();
+
+  const minimizeAll = useCallback(() => {
+    setWins((prev) => prev.map((w) => (w.closing ? w : { ...w, minimized: true })));
+  }, []);
+
+  const closeAll = useCallback(() => {
+    const reduced =
+      typeof window !== "undefined" &&
+      window.matchMedia("(prefers-reduced-motion:reduce)").matches;
+    setWins((prev) => prev.map((w) => ({ ...w, closing: true })));
+    window.setTimeout(() => setWins([]), reduced ? 0 : 200);
+  }, []);
+
+  const exitToSite = useCallback(() => {
+    // The desktop runs inside the takeover iframe; ask the parent to close it.
+    if (typeof window !== "undefined" && window.parent !== window) {
+      window.parent.postMessage("ashos:exit", "*");
+    }
+  }, []);
+
+  // Help ▸ Terminal Commands opens the Terminal and runs `help` in it.
+  const [helpSignal, setHelpSignal] = useState(0);
+  const showTerminalHelp = useCallback(() => {
+    openWindow("terminal");
+    setHelpSignal((n) => n + 1);
+  }, [openWindow]);
+
+  // Which menubar menu (if any) is currently dropped down.
+  const [openMenu, setOpenMenu] = useState<string | null>(null);
+  // Close menus on Escape.
+  useEffect(() => {
+    if (!openMenu) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpenMenu(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [openMenu]);
+
+  const menus: Record<string, MenuItem[]> = {
+    ashOS: [
+      { label: "About ashOS", run: () => openWindow("ashos") },
+      { sep: true },
+      { label: "Exit to site", run: exitToSite },
+    ],
+    File: [
+      { label: "New Terminal", run: () => openWindow("terminal") },
+      { label: "Minimize Window", disabled: !topKey, run: () => topKey && minimizeWindow(topKey) },
+      { label: "Close Window", disabled: !topKey, run: () => topKey && closeWindow(topKey) },
+    ],
+    View: [
+      { label: theme === "dark" ? "Light Mode" : "Dark Mode", run: () => toggleTheme() },
+      { label: "Minimize All", run: minimizeAll },
+      { sep: true },
+      { label: "Close All Windows", run: closeAll },
+    ],
+    Go: DOCK.map(([key, label]) => ({ label, run: () => openWindow(key) })),
+    Help: [
+      { label: "Terminal Commands", run: showTerminalHelp },
+      { sep: true },
+      {
+        label: "GitHub ↗",
+        run: () => window.open("https://github.com/imAshutoshGupta", "_blank", "noopener"),
+      },
+      {
+        label: "Email ↗",
+        run: () => window.open("mailto:hello@ashutoshgupta.dev", "_blank", "noopener"),
+      },
+    ],
+  };
 
   const openKeys = new Set(wins.filter((w) => !w.closing).map((w) => w.key));
 
@@ -832,19 +1200,50 @@ export default function DesktopPage() {
           <span className="w-[15px] h-[15px] mr-[7px] [&>svg]:w-full [&>svg]:h-full [&>svg]:block">
             {MenubarLogo}
           </span>
-          <span className="font-disp font-semibold mr-[14px] tracking-[.2px]">ashOS</span>
-          <span className="px-[9px] py-[3px] rounded-[6px] cursor-default text-[var(--fg)] font-medium hover:bg-[var(--line2)]">
-            File
-          </span>
-          <span className="px-[9px] py-[3px] rounded-[6px] cursor-default text-[var(--fg)] font-medium hover:bg-[var(--line2)] max-[760px]:hidden">
-            View
-          </span>
-          <span className="px-[9px] py-[3px] rounded-[6px] cursor-default text-[var(--fg)] font-medium hover:bg-[var(--line2)] max-[760px]:hidden">
-            Go
-          </span>
-          <span className="px-[9px] py-[3px] rounded-[6px] cursor-default text-[var(--fg)] font-medium hover:bg-[var(--line2)] max-[760px]:hidden">
-            Help
-          </span>
+          <Menu
+            label="ashOS"
+            items={menus.ashOS}
+            isOpen={openMenu === "ashOS"}
+            anyOpen={openMenu !== null}
+            onOpen={() => setOpenMenu("ashOS")}
+            onClose={() => setOpenMenu(null)}
+            triggerClass="font-disp font-semibold mr-[8px] tracking-[.2px]"
+          />
+          <Menu
+            label="File"
+            items={menus.File}
+            isOpen={openMenu === "File"}
+            anyOpen={openMenu !== null}
+            onOpen={() => setOpenMenu("File")}
+            onClose={() => setOpenMenu(null)}
+          />
+          <Menu
+            label="View"
+            items={menus.View}
+            isOpen={openMenu === "View"}
+            anyOpen={openMenu !== null}
+            onOpen={() => setOpenMenu("View")}
+            onClose={() => setOpenMenu(null)}
+            triggerClass="max-[760px]:hidden"
+          />
+          <Menu
+            label="Go"
+            items={menus.Go}
+            isOpen={openMenu === "Go"}
+            anyOpen={openMenu !== null}
+            onOpen={() => setOpenMenu("Go")}
+            onClose={() => setOpenMenu(null)}
+            triggerClass="max-[760px]:hidden"
+          />
+          <Menu
+            label="Help"
+            items={menus.Help}
+            isOpen={openMenu === "Help"}
+            anyOpen={openMenu !== null}
+            onOpen={() => setOpenMenu("Help")}
+            onClose={() => setOpenMenu(null)}
+            triggerClass="max-[760px]:hidden"
+          />
         </div>
         <div className="ml-auto flex items-center gap-[14px]">
           <span
@@ -872,16 +1271,18 @@ export default function DesktopPage() {
           >
             {clock}
           </span>
-          <span
-            onClick={toggleTheme}
+          <button
+            type="button"
+            onClick={() => toggleTheme()}
             title="Toggle theme"
+            aria-label="Toggle theme"
             className="flex items-center gap-[5px] cursor-pointer px-[9px] py-[2px] rounded-[7px] border border-[var(--line2)] bg-[var(--line)] text-[11px] font-semibold transition-[background] duration-[200ms] hover:bg-[var(--line2)]"
           >
             <span className="flex items-center [&>svg]:w-[13px] [&>svg]:h-[13px]">
               {theme === "dark" ? MoonIcon : SunIcon}
             </span>
             <span>{theme === "dark" ? "Dark" : "Light"}</span>
-          </span>
+          </button>
         </div>
       </div>
 
@@ -907,16 +1308,31 @@ export default function DesktopPage() {
         id="window-layer"
         className="fixed inset-[30px_0_0_0] z-[10] pointer-events-none max-[760px]:static max-[760px]:flex max-[760px]:flex-col max-[760px]:gap-[16px] max-[760px]:px-[12px] max-[760px]:pt-[42px] max-[760px]:pb-[110px]"
       >
-        {wins.map((w) => (
-          <Window
-            key={w.key}
-            win={w}
-            spec={CONTENT[w.key]}
-            onClose={() => closeWindow(w.key)}
-            onFocus={() => focusWindow(w.key)}
-            onDrag={(cx, cy, ox, oy) => dragWindow(w.key, cx, cy, ox, oy)}
-          />
-        ))}
+        {wins
+          .filter((w) => !w.minimized)
+          .map((w) => (
+            <Window
+              key={w.key}
+              win={w}
+              spec={CONTENT[w.key]}
+              body={
+                w.key === "terminal" ? (
+                  <OsTerminal
+                    onToggleTheme={toggleTheme}
+                    onOpenApp={openWindow}
+                    helpSignal={helpSignal}
+                  />
+                ) : (
+                  CONTENT[w.key].body
+                )
+              }
+              onClose={() => closeWindow(w.key)}
+              onMinimize={() => minimizeWindow(w.key)}
+              onMaximize={() => maximizeWindow(w.key)}
+              onFocus={() => focusWindow(w.key)}
+              onDrag={(cx, cy, ox, oy) => dragWindow(w.key, cx, cy, ox, oy)}
+            />
+          ))}
       </div>
 
       {/* DOCK */}
@@ -972,6 +1388,81 @@ function DesktopIcon({
       <span className="dicon-label text-[11.5px] font-medium leading-[1.2] bg-[rgba(0,0,0,.25)] px-[6px] py-[1px] rounded-[5px]">
         {label}
       </span>
+    </div>
+  );
+}
+
+/* ============================================================
+   MENUBAR dropdown menu
+   ============================================================ */
+type MenuItem =
+  | { sep: true }
+  | { sep?: false; label: string; run: () => void; disabled?: boolean };
+
+function Menu({
+  label,
+  items,
+  isOpen,
+  anyOpen,
+  onOpen,
+  onClose,
+  triggerClass = "",
+}: {
+  label: string;
+  items: MenuItem[];
+  isOpen: boolean;
+  anyOpen: boolean;
+  onOpen: () => void;
+  onClose: () => void;
+  triggerClass?: string;
+}) {
+  return (
+    <div className={"relative " + triggerClass}>
+      <button
+        type="button"
+        onClick={() => (isOpen ? onClose() : onOpen())}
+        // macOS behavior: once a menu is open, hovering siblings switches to them.
+        onPointerEnter={() => {
+          if (anyOpen && !isOpen) onOpen();
+        }}
+        className={
+          "px-[9px] py-[3px] rounded-[6px] cursor-pointer text-[var(--fg)] font-medium transition-[background] duration-[120ms] hover:bg-[var(--line2)] " +
+          (isOpen ? "bg-[var(--line2)]" : "")
+        }
+      >
+        {label}
+      </button>
+      {isOpen && (
+        <>
+          {/* click-away catcher (sits below the dropdown, above the rest) */}
+          <div className="fixed inset-0 z-[990]" onClick={onClose} />
+          <div className="absolute left-0 top-full mt-[5px] z-[1001] min-w-[190px] py-[5px] rounded-[10px] border border-[var(--line2)] bg-[var(--glass-bar)] [backdrop-filter:blur(24px)_saturate(1.4)] [-webkit-backdrop-filter:blur(24px)_saturate(1.4)] shadow-[0_18px_50px_-16px_rgba(0,0,0,.6)]">
+            {items.map((it, i) =>
+              it.sep ? (
+                <div key={i} className="my-[5px] h-px bg-[var(--line)]" />
+              ) : (
+                <button
+                  key={i}
+                  type="button"
+                  disabled={it.disabled}
+                  onClick={() => {
+                    onClose();
+                    it.run();
+                  }}
+                  className={
+                    "w-full text-left px-[12px] py-[6px] text-[13px] text-[var(--fg)] transition-[background] duration-[120ms] " +
+                    (it.disabled
+                      ? "opacity-40 cursor-default"
+                      : "cursor-pointer hover:bg-[linear-gradient(120deg,rgba(157,139,255,.22),rgba(103,182,255,.22))]")
+                  }
+                >
+                  {it.label}
+                </button>
+              )
+            )}
+          </div>
+        </>
+      )}
     </div>
   );
 }

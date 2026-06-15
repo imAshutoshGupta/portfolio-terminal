@@ -58,6 +58,16 @@ export default function Home() {
     return () => document.removeEventListener("keydown", onKey);
   }, [closeOS]);
 
+  // The ashOS desktop (in the takeover iframe) posts this when its
+  // "Exit to site" menu item is chosen.
+  useEffect(() => {
+    const onMessage = (e: MessageEvent) => {
+      if (e.data === "ashos:exit") closeOS();
+    };
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, [closeOS]);
+
   // parallax · 3D tilt · kinetic headline · scroll reveal — ported from the original
   useEffect(() => {
     const fine = window.matchMedia("(pointer:fine)").matches;
@@ -214,11 +224,11 @@ export default function Home() {
             </span>
           </div>
 
-          <div className="grid grid-cols-[1.15fr_0.85fr] gap-[50px] items-center max-[900px]:grid-cols-1 max-[900px]:gap-9">
+          <div className="grid grid-cols-[1fr_0.92fr] gap-[44px] items-center max-[900px]:grid-cols-1 max-[900px]:gap-9">
             <div data-parallax="0.05">
               <h1
                 id="kin"
-                className="font-disp font-semibold text-[clamp(52px,10vw,132px)] leading-[0.82] tracking-[-0.04em] my-[6px] uppercase"
+                className="font-disp font-semibold text-[clamp(48px,7.6vw,104px)] leading-[0.84] tracking-[-0.04em] my-[6px] uppercase"
               >
                 <span className="ln block will-change-transform" data-depth="0.45">
                   ASHUTOSH
